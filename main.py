@@ -20,17 +20,17 @@ if 'Review' not in df.columns:
 df['Review'] = df['Review'].fillna('')  # Replace NaN with empty string
 
 # Step 3: TF-IDF Vectorization with N-Grams
-# Slightly reduce the number of features to balance memory usage and accuracy
-vectorizer = TfidfVectorizer(max_features=2000, ngram_range=(1, 2))  # Adjust max_features for a good balance
+# Reduce the number of features to lower memory usage
+vectorizer = TfidfVectorizer(max_features=1000, ngram_range=(1, 2))
 X_tfidf = vectorizer.fit_transform(df['Review'])
 
 # Save the TF-IDF vectorizer for later use
 joblib.dump(vectorizer, 'tfidf_vectorizer.pkl')
 
 # Step 4: Word Embeddings with Word2Vec
-# Use an intermediate vector size to balance memory and accuracy
+# Reduce vector_size to lower memory usage
 word2vec_model = Word2Vec(sentences=[review.split() for review in df['Review']],
-                          vector_size=75, window=5, min_count=1, workers=4)  # Adjust vector_size
+                          vector_size=50, window=5, min_count=1, workers=4)
 word2vec_model.save('word2vec_model_file')
 
 # Function to generate average word vectors for a review
@@ -43,13 +43,12 @@ def get_average_word2vec(review, model, vector_size):
         return np.zeros(vector_size)
 
 # Apply the function to get Word2Vec features for each review
-X_word2vec = np.array([get_average_word2vec(review, word2vec_model, 75) for review in df['Review']])
+X_word2vec = np.array([get_average_word2vec(review, word2vec_model, 50) for review in df['Review']])
 
 # Convert Word2Vec features to sparse matrix
 X_word2vec_sparse = csr_matrix(X_word2vec)
 
 # Step 5: Combine TF-IDF features and Word2Vec features
-# Ensure that the combined features are handled efficiently
 X_combined = hstack([X_tfidf, X_word2vec_sparse])
 
 # Step 6: Define target variable
@@ -59,23 +58,23 @@ y = df['Relevance_Score']
 X_train, X_test, y_train, y_test = train_test_split(X_combined, y, test_size=0.2, random_state=42)
 
 # Step 8: Initialize the XGBoost Regressor
-# Use a moderate number of estimators and depth to balance accuracy and memory usage
-model = XGBRegressor(random_state=42, n_estimators=120, max_depth=7)  # Adjust n_estimators and max_depth
+# Reduce n_estimators to reduce memory usage
+model = XGBRegressor(random_state=42, n_estimators=100)
 
 # Step 9: Define the hyperparameter distribution for RandomizedSearchCV
 param_distributions = {
-    'n_estimators': randint(100, 200),  # Use a balanced range for n_estimators
-    'max_depth': randint(5, 8),         # Adjust max_depth for efficient training
+    'n_estimators': randint(50, 150),  # Reduce upper bound of n_estimators
+    'max_depth': randint(3, 8),        # Reduce max_depth to control overfitting and memory usage
     'learning_rate': uniform(0.01, 0.1),
-    'subsample': uniform(0.7, 1.0),
-    'colsample_bytree': uniform(0.7, 1.0),
+    'subsample': uniform(0.6, 1.0),
+    'colsample_bytree': uniform(0.6, 1.0),
 }
 
 # Step 10: Setup RandomizedSearchCV
 random_search = RandomizedSearchCV(
     estimator=model,
     param_distributions=param_distributions,
-    n_iter=40,  # Use a reasonable number of iterations
+    n_iter=30,  # Reduce number of iterations
     scoring='neg_mean_squared_error',
     cv=3,  # 3-fold cross-validation
     verbose=1,
