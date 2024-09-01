@@ -7,7 +7,8 @@ from gensim.models import Word2Vec
 import numpy as np
 from scipy.stats import randint, uniform
 import joblib
-from scipy.sparse import hstack
+from scipy.sparse import hstack, csr_matrix
+
 # Step 1: Load the dataset
 df = pd.read_csv('combined_reviews_with_refined_relevance_scores_v2.csv')
 
@@ -19,21 +20,20 @@ if 'Review' not in df.columns:
 df['Review'] = df['Review'].fillna('')  # Replace NaN with empty string
 
 # Step 3: TF-IDF Vectorization with N-Grams
-vectorizer = TfidfVectorizer(max_features=2378, ngram_range=(1, 3))  # Ensure max_features matches across training and prediction
+# Slightly reduce the number of features to balance memory usage and accuracy
+vectorizer = TfidfVectorizer(max_features=2000, ngram_range=(1, 2))  # Adjust max_features for a good balance
 X_tfidf = vectorizer.fit_transform(df['Review'])
 
 # Save the TF-IDF vectorizer for later use
 joblib.dump(vectorizer, 'tfidf_vectorizer.pkl')
 
 # Step 4: Word Embeddings with Word2Vec
-# Tokenize reviews into words
-tokenized_reviews = [review.split() for review in df['Review']]
-
-# Train a Word2Vec model on the tokenized reviews
-word2vec_model = Word2Vec(sentences=tokenized_reviews, vector_size=100, window=5, min_count=1, workers=4)
+# Use an intermediate vector size to balance memory and accuracy
+word2vec_model = Word2Vec(sentences=[review.split() for review in df['Review']],
+                          vector_size=75, window=5, min_count=1, workers=4)  # Adjust vector_size
 word2vec_model.save('word2vec_model_file')
 
-# Create a function to generate the average word vectors for a review
+# Function to generate average word vectors for a review
 def get_average_word2vec(review, model, vector_size):
     words = review.split()
     word_vectors = [model.wv[word] for word in words if word in model.wv]
@@ -43,10 +43,14 @@ def get_average_word2vec(review, model, vector_size):
         return np.zeros(vector_size)
 
 # Apply the function to get Word2Vec features for each review
-X_word2vec = np.array([get_average_word2vec(review, word2vec_model, 100) for review in df['Review']])
+X_word2vec = np.array([get_average_word2vec(review, word2vec_model, 75) for review in df['Review']])
+
+# Convert Word2Vec features to sparse matrix
+X_word2vec_sparse = csr_matrix(X_word2vec)
 
 # Step 5: Combine TF-IDF features and Word2Vec features
-X_combined = hstack([X_tfidf, X_word2vec])
+# Ensure that the combined features are handled efficiently
+X_combined = hstack([X_tfidf, X_word2vec_sparse])
 
 # Step 6: Define target variable
 y = df['Relevance_Score']
@@ -55,22 +59,23 @@ y = df['Relevance_Score']
 X_train, X_test, y_train, y_test = train_test_split(X_combined, y, test_size=0.2, random_state=42)
 
 # Step 8: Initialize the XGBoost Regressor
-model = XGBRegressor(random_state=42)
+# Use a moderate number of estimators and depth to balance accuracy and memory usage
+model = XGBRegressor(random_state=42, n_estimators=120, max_depth=7)  # Adjust n_estimators and max_depth
 
 # Step 9: Define the hyperparameter distribution for RandomizedSearchCV
 param_distributions = {
-    'n_estimators': randint(50, 300),
-    'max_depth': randint(3, 10),
-    'learning_rate': uniform(0.01, 0.2),
-    'subsample': uniform(0.6, 1.0),
-    'colsample_bytree': uniform(0.6, 1.0),
+    'n_estimators': randint(100, 200),  # Use a balanced range for n_estimators
+    'max_depth': randint(5, 8),         # Adjust max_depth for efficient training
+    'learning_rate': uniform(0.01, 0.1),
+    'subsample': uniform(0.7, 1.0),
+    'colsample_bytree': uniform(0.7, 1.0),
 }
 
 # Step 10: Setup RandomizedSearchCV
 random_search = RandomizedSearchCV(
     estimator=model,
     param_distributions=param_distributions,
-    n_iter=50,  # Number of parameter settings that are sampled
+    n_iter=40,  # Use a reasonable number of iterations
     scoring='neg_mean_squared_error',
     cv=3,  # 3-fold cross-validation
     verbose=1,
